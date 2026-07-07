@@ -1,53 +1,99 @@
-# GitHub Repo Intro
+# A-Share Top5 Combo Factor Strategy
 
-## 仓库一句话描述
+一个面向 A 股日频研究的开源实验仓库，当前重点探索：
 
-一个面向 A 股日频研究的组合因子实验仓库：把价量因子、收盘后选股、FTShare 舆情增强和可复现回测串成一条可迭代的研究流程。
+`收盘后组合因子选股 + 次日舆情增强排序`
 
-## 仓库简介（短版）
+这个仓库公开的不只是结果，更是研究过程本身：因子定义、组合权重、去重思路、数据口径，以及目前还没有彻底解决的问题。欢迎社区一起复核、质疑和改进。
 
-这个仓库记录了一套正在持续迭代的 A 股日频策略研究流程。当前核心是一个 `Top5` 组合因子框架：先从价量行为里筛出若干候选因子，再通过固定权重组合生成收盘后观察池，最后叠加 FTShare 和外部资讯网站的舆情信息，辅助第二天的观察与交易决策。
+## 项目在做什么
 
-公开它的目的，不是展示“稳定赚钱的黑盒策略”，而是把研究过程摊开给社区看：因子表达式、组合逻辑、权重设定、舆情层使用方式、以及当前还没解决完的中性化和样本外稳健性问题。欢迎大家一起挑毛病、提改法、做复核。
+当前版本围绕一套 `Top5` 价量组合因子展开：
 
-## 仓库简介（README 首页版）
+1. 从日频价量行为中筛选候选因子
+2. 将 5 个因子按固定权重组合成收盘后信号
+3. 生成次日观察池
+4. 用 FTShare 和外部资讯网站做舆情增强排序
 
-QuantaAlpha is an open research workspace for A-share daily factor experiments.
+目标不是做一个“自动下单黑盒”，而是做一套可讨论、可复核、可持续迭代的 A 股日频研究流程。
 
-This repository currently focuses on a practical workflow:
+## 当前策略框架
 
-1. mine and curate price-volume factors,
-2. combine a small set of factors into a post-close watchlist strategy,
-3. overlay FTShare and external news sentiment for next-session ranking,
-4. iterate in public with feedback from other researchers and traders.
+- 股票池：`CSI300`
+- 频率：`日频`
+- 使用场景：`收盘后生成次日观察池`
+- 组合方式：`横截面 rank 后固定权重加总`
+- 舆情层：`FTShare + 外部资讯网站人工核查`
 
-The current public package centers on a `Top5` combo factor strategy for `CSI300`, along with its factor definitions, combination weights, and research notes. The goal is not to present a polished “alpha product”, but to open the research process itself: what we are testing, what seems to work, what is probably redundant, and where the strategy is still fragile.
+## 5 个底层因子
 
-If you are interested in A-share factor research, post-close portfolio construction, factor de-duplication, or how to use sentiment as a ranking overlay rather than a backtest illusion, feedback is very welcome.
-
-## 建议放在 GitHub 仓库描述栏
-
-可选版本 1：
-
-```text
-A-share daily factor research workspace: Top5 combo factors, post-close watchlists, FTShare sentiment overlay, and open iteration.
-```
-
-可选版本 2：
+### 1. IntradayRangeComplexityDrift_5D
 
 ```text
-Open A-share factor research repo for post-close watchlist strategies, price-volume combo factors, and sentiment-assisted ranking.
+($return > 0) ? ((1 - 2 * RANK(TS_STD($high - $low, 5))) * (1 - ABS($return))) : 0
 ```
 
-## 建议放在 README 开头的中文导语
+含义：
+偏好上涨日里“日内波动收敛、涨幅不过热”的标的。
+
+### 2. Neg_RangeVol_20D
 
 ```text
-这是一个面向 A 股日频研究的开源实验仓库，当前重点探索“收盘后组合因子选股 + 次日舆情增强排序”的策略流程。仓库公开的不只是结果，更是研究过程本身：因子定义、组合权重、去重思路、数据口径、以及还没彻底解决的问题。欢迎社区一起复核、质疑和改进。
+RANK(-TS_STD($high - $low, 20))
 ```
 
-## 建议对外说明的边界
+含义：
+偏好过去 20 日波动区间更稳定的股票。
 
-- 这是研究仓库，不是收益承诺
-- 当前更接近“观察池策略”，不是全自动交易系统
-- 舆情层主要用于实时排序增强，不等同于严格可回放的历史因子
-- 当前公开版本仍缺少完整的行业/市值中性化处理
+### 3. Surprise_minus_Volume_Rank
+
+```text
+RANK(TS_ZSCORE($return, 20)) - RANK($volume)
+```
+
+含义：
+偏好“收益异常度较高，但成交量尚未明显拥挤”的标的。
+
+### 4. Net_Buying_Accumulation_Signal_20D
+
+```text
+TS_SUM(SIGN($close - $open) * $volume, 20) / (TS_SUM($volume, 20) + 1e-8)
+```
+
+含义：
+近似衡量 20 日持续承接和净买入倾向。
+
+### 5. PosCumRet_Vol_Interaction_5D_20D
+
+```text
+(TS_SUM($return, 5) > 0) ? (TS_SUM($return, 5) * TS_STD($return, 20)) : 0
+```
+
+含义：
+只在近 5 日累计收益为正时激活，衡量上涨背景下的波动交互。
+
+## 当前组合权重
+
+```text
+IntradayRangeComplexityDrift_5D      0.30
+Neg_RangeVol_20D                     0.20
+Surprise_minus_Volume_Rank           0.20
+Net_Buying_Accumulation_Signal_20D   0.15
+PosCumRet_Vol_Interaction_5D_20D     0.15
+```
+
+组合定义：
+
+```text
+combo_score = 0.30*f1 + 0.20*f2 + 0.20*f3 + 0.15*f4 + 0.15*f5
+```
+
+在实际实现中，先做横截面 rank，再加权求和。
+
+## 当前观察到的特点
+
+- `IntradayRangeComplexityDrift_5D` 与 `Neg_RangeVol_20D` 有一定相关性，低波动信息可能存在重复
+- 信号在弱市中更容易偏向银行、港口、电力、运营商等防守资产
+- 舆情层加入后，更适合作为实时排序增强，而不是直接当作历史回测因子
+
+## 当前限制
